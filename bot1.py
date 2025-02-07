@@ -23,9 +23,6 @@ API_ID = "21164074"
 API_HASH = "9aebf8ac7742705ce930b06a706754fd"
 BOT_TOKEN = "7878223314:AAGdrEWvu86sVWXCHIDFqqZw6m68mK6q5pY"
 
-# Allowed user IDs (Fill this with actual user IDs allowed to use the bot)
-ALLOWED_USERS = [123456789]  # Update with actual Telegram user IDs
-
 # Base folder to store downloaded files (Windows Downloads folder)
 BASE_DOWNLOAD_FOLDER = os.path.join(os.path.expanduser("~"), "Downloads")
 if not os.path.exists(BASE_DOWNLOAD_FOLDER):
@@ -80,11 +77,6 @@ def compute_md5(file_path, chunk_size=8192):
         logging.error(f"Error computing md5 for {file_path}: {e}")
         return None
     return hash_md5.hexdigest()
-
-
-def is_authorized(user_id):
-    """Check if the user is authorized."""
-    return user_id in ALLOWED_USERS
 
 
 async def delete_all_files():
@@ -149,8 +141,7 @@ def extract_archive(file_path):
 
 def move_media_files(source_dir, destination):
     """
-    Recursively search source_dir for image and video files.
-    Move them to the destination folder.
+    Recursively search source_dir for image and video files and move them to the destination folder.
     """
     moved_files = []
     for root, dirs, files in os.walk(source_dir):
@@ -158,7 +149,7 @@ def move_media_files(source_dir, destination):
             file_lower = file.lower()
             if any(file_lower.endswith(ext) for ext in IMAGE_EXTENSIONS + VIDEO_EXTENSIONS):
                 src_path = os.path.join(root, file)
-                # If a file with same name exists in destination, generate a unique name
+                # Generate a unique destination path if file exists
                 dest_path = os.path.join(destination, file)
                 if os.path.exists(dest_path):
                     base, ext = os.path.splitext(file)
@@ -177,8 +168,6 @@ def move_media_files(source_dir, destination):
 # ---------------------------
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
     welcome_text = (
         "Chào mừng!\n"
         "Các lệnh khả dụng:\n"
@@ -197,11 +186,8 @@ async def start_command(client, message):
 
 @app.on_message(filters.command("download"))
 async def download_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     args = message.text.split(maxsplit=1)
-    # URL-based download: if a URL is provided along with /download command.
+    # URL-based download: if a URL is provided with the /download command.
     if len(args) > 1:
         url = args[1].strip()
         if url.startswith("http"):
@@ -222,9 +208,6 @@ async def download_command(client, message):
 
 @app.on_message(filters.command("stop"))
 async def stop_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     global downloading
     async with download_lock:
         if not downloading:
@@ -236,9 +219,6 @@ async def stop_command(client, message):
 
 @app.on_message(filters.command("upload"))
 async def upload_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     global uploading, failed_uploads
     if uploading:
         await message.reply("Đã có tác vụ đồng bộ hóa đang chạy.")
@@ -277,9 +257,6 @@ async def upload_command(client, message):
 
 @app.on_message(filters.command("retry_download"))
 async def retry_download_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     global failed_files
     if not failed_files:
         await message.reply("Không có file bị lỗi nào để tải lại.")
@@ -300,9 +277,6 @@ async def retry_download_command(client, message):
 
 @app.on_message(filters.command("retry_upload"))
 async def retry_upload_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     global failed_uploads, uploading
     if not failed_uploads:
         await message.reply("Không có file upload nào bị lỗi để tải lại.")
@@ -342,9 +316,6 @@ async def retry_upload_command(client, message):
 
 @app.on_message(filters.command("status"))
 async def status_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     status = get_system_status()
     status_message = f"CPU: {status['cpu']}\nMemory: {status['memory']}\nDisk: {status['disk']}\n"
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
@@ -352,18 +323,12 @@ async def status_command(client, message):
 
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     deleted = await delete_all_files()
     await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
 
 
 @app.on_message(filters.command("stats"))
 async def stats_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     stats_message = (
         f"Số file đã tải: {download_stats['files_downloaded']}\n"
         f"Tổng dung lượng đã tải: {download_stats['bytes_downloaded'] / (1024*1024):.2f} MB"
@@ -373,19 +338,12 @@ async def stats_command(client, message):
 
 @app.on_message(filters.command("cleanup"))
 async def cleanup_command(client, message):
-    if not is_authorized(message.from_user.id):
-        return await message.reply("Unauthorized user.")
-    
     deleted = await delete_all_files()
     await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
 
 
 @app.on_message()
 async def handle_message(client, message):
-    # Only process messages from authorized users
-    if not is_authorized(message.from_user.id):
-        return
-
     # Handle URL messages outside of download mode
     if message.text and message.text.startswith("http"):
         await download_from_url(message, message.text.strip())
@@ -553,7 +511,7 @@ async def download_from_url(message, url):
                     download_stats['files_downloaded'] += 1
                     download_stats['bytes_downloaded'] += os.path.getsize(file_path)
 
-                # If downloaded file is an archive, attempt extraction and move media files
+                # If the downloaded file is an archive, attempt extraction and move media files
                 lower_file = file_path.lower()
                 if any(lower_file.endswith(ext) for ext in ARCHIVE_EXTENSIONS):
                     extract_dir = extract_archive(file_path)
