@@ -65,7 +65,6 @@ logging.basicConfig(
 # Initialize Telegram Bot Client
 app = Client("telegram_downloader", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-
 # ---------------------------
 # Utility Functions
 # ---------------------------
@@ -361,24 +360,24 @@ async def status_command(client, message):
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
 
 
-# Updated /delete command: require user confirmation by replying "yes"
+# Updated /delete command: use wait_for_reply to require user confirmation by replying "yes"
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
-    reply = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
-    if reply and reply.text.lower() == "yes":
+    confirmation = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
+    if confirmation and confirmation.text.lower() == "yes":
         deleted = await delete_all_files()
         await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
     else:
         await message.reply("Hủy xóa file vì không nhận được 'yes'.")
 
 
-# Updated /cleanup command: require user confirmation by replying "yes"
+# Updated /cleanup command: use wait_for_reply to require user confirmation by replying "yes"
 @app.on_message(filters.command("cleanup"))
 async def cleanup_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
-    reply = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
-    if reply and reply.text.lower() == "yes":
+    confirmation = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
+    if confirmation and confirmation.text.lower() == "yes":
         deleted = await delete_all_files()
         await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
     else:
