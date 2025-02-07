@@ -180,9 +180,9 @@ async def start_command(client, message):
         "/retry_download - Tải lại file bị lỗi\n"
         "/retry_upload - Tải lại file upload bị lỗi\n"
         "/status - Hiển thị trạng thái hệ thống\n"
-        "/delete - Xóa tất cả các file trong thư mục tải về\n"
+        "/delete - Xóa tất cả các file trong thư mục tải về (cần xác nhận bằng cách trả lời 'yes')\n"
         "/stats - Thống kê tải về\n"
-        "/cleanup - Dọn dẹp file tạm thời"
+        "/cleanup - Dọn dẹp file tạm thời (cần xác nhận bằng cách trả lời 'yes')"
     )
     await message.reply(welcome_text)
 
@@ -337,10 +337,34 @@ async def status_command(client, message):
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
 
 
+# Updated /delete command: require user confirmation by typing "yes"
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
-    deleted = await delete_all_files()
-    await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
+    confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    try:
+        confirmation = await app.listen(message.chat.id, timeout=30)
+        if confirmation.text.lower() == "yes":
+            deleted = await delete_all_files()
+            await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
+        else:
+            await message.reply("Hủy xóa file. Bạn không nhập 'yes'.")
+    except asyncio.TimeoutError:
+        await message.reply("Xác nhận đã hết thời gian. Hủy xóa file.")
+
+
+# Updated /cleanup command: require user confirmation by typing "yes"
+@app.on_message(filters.command("cleanup"))
+async def cleanup_command(client, message):
+    confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    try:
+        confirmation = await app.listen(message.chat.id, timeout=30)
+        if confirmation.text.lower() == "yes":
+            deleted = await delete_all_files()
+            await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
+        else:
+            await message.reply("Hủy dọn dẹp file. Bạn không nhập 'yes'.")
+    except asyncio.TimeoutError:
+        await message.reply("Xác nhận đã hết thời gian. Hủy dọn dẹp file.")
 
 
 @app.on_message(filters.command("stats"))
@@ -350,12 +374,6 @@ async def stats_command(client, message):
         f"Tổng dung lượng đã tải: {download_stats['bytes_downloaded'] / (1024*1024):.2f} MB"
     )
     await message.reply(f"Thống kê tải về:\n{stats_message}")
-
-
-@app.on_message(filters.command("cleanup"))
-async def cleanup_command(client, message):
-    deleted = await delete_all_files()
-    await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
 
 
 @app.on_message()
