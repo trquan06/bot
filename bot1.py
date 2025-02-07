@@ -337,12 +337,11 @@ async def status_command(client, message):
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
 
 
-# Updated /delete command: require user confirmation by typing "yes"
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
     try:
-        # Use confirm_msg.id instead of confirm_msg.message_id
+        # Use app.listen() method to wait for a response
         confirmation = await app.listen(message.chat.id, timeout=30)
         if confirmation.text.lower() == "yes":
             deleted = await delete_all_files()
@@ -353,12 +352,11 @@ async def delete_command(client, message):
         await message.reply("Xác nhận đã hết thời gian. Hủy xóa file.")
 
 
-# Updated /cleanup command: require user confirmation by typing "yes"
 @app.on_message(filters.command("cleanup"))
 async def cleanup_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
     try:
-        # Use confirm_msg.id instead of confirm_msg.message_id
+        # Use app.listen() method to wait for a response
         confirmation = await app.listen(message.chat.id, timeout=30)
         if confirmation.text.lower() == "yes":
             deleted = await delete_all_files()
