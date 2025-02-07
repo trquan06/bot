@@ -23,6 +23,8 @@ API_ID = "21164074"
 API_HASH = "9aebf8ac7742705ce930b06a706754fd"
 BOT_TOKEN = "7878223314:AAGdrEWvu86sVWXCHIDFqqZw6m68mK6q5pY"
 
+# No need for allowed user checks now as only you are using the bot
+
 # Base folder to store downloaded files (Windows Downloads folder)
 BASE_DOWNLOAD_FOLDER = os.path.join(os.path.expanduser("~"), "Downloads")
 if not os.path.exists(BASE_DOWNLOAD_FOLDER):
@@ -141,7 +143,8 @@ def extract_archive(file_path):
 
 def move_media_files(source_dir, destination):
     """
-    Recursively search source_dir for image and video files and move them to the destination folder.
+    Recursively search source_dir for image and video files.
+    Move them to the destination folder.
     """
     moved_files = []
     for root, dirs, files in os.walk(source_dir):
@@ -149,7 +152,7 @@ def move_media_files(source_dir, destination):
             file_lower = file.lower()
             if any(file_lower.endswith(ext) for ext in IMAGE_EXTENSIONS + VIDEO_EXTENSIONS):
                 src_path = os.path.join(root, file)
-                # Generate a unique destination path if file exists
+                # If a file with same name exists in destination, generate a unique name
                 dest_path = os.path.join(destination, file)
                 if os.path.exists(dest_path):
                     base, ext = os.path.splitext(file)
@@ -187,7 +190,7 @@ async def start_command(client, message):
 @app.on_message(filters.command("download"))
 async def download_command(client, message):
     args = message.text.split(maxsplit=1)
-    # URL-based download: if a URL is provided with the /download command.
+    # URL-based download: if a URL is provided along with /download command.
     if len(args) > 1:
         url = args[1].strip()
         if url.startswith("http"):
@@ -223,6 +226,13 @@ async def upload_command(client, message):
     if uploading:
         await message.reply("Đã có tác vụ đồng bộ hóa đang chạy.")
         return
+
+    # Use absolute path for rclone
+    rclone_path = r"C:\rclone\rclone.exe"
+    if not os.path.exists(rclone_path):
+        await message.reply("Rclone không được tìm thấy tại C:\\rclone\\rclone.exe. Vui lòng kiểm tra lại đường dẫn.")
+        return
+
     uploading = True
     await message.reply("Bắt đầu đồng bộ hóa file ảnh/video lên album ONLYFAN trên Google Photos...")
     album_name = "ONLYFAN"  # Album name for uploads
@@ -231,7 +241,7 @@ async def upload_command(client, message):
         with open("error_log.txt", "w", encoding="utf-8") as log_file:
             result = subprocess.run(
                 [
-                    "rclone", "copy", BASE_DOWNLOAD_FOLDER, f"GG PHOTO:album/{album_name}",
+                    rclone_path, "copy", BASE_DOWNLOAD_FOLDER, f"GG PHOTO:album/{album_name}",
                     "--transfers=32", "--drive-chunk-size=128M", "--tpslimit=20", "-P"
                 ],
                 stdout=log_file, stderr=log_file, text=True, encoding="utf-8"
@@ -286,6 +296,12 @@ async def retry_upload_command(client, message):
         await message.reply("Đã có tác vụ đồng bộ hóa đang chạy.")
         return
 
+    # Use absolute rclone path
+    rclone_path = r"C:\rclone\rclone.exe"
+    if not os.path.exists(rclone_path):
+        await message.reply("Rclone không được tìm thấy tại C:\\rclone\\rclone.exe. Vui lòng kiểm tra lại đường dẫn.")
+        return
+
     uploading = True
     await message.reply("Bắt đầu tải lại quá trình upload cho các file bị lỗi...")
     album_name = "ONLYFAN"
@@ -296,7 +312,7 @@ async def retry_upload_command(client, message):
             for file_path in failed_uploads.copy():
                 result = subprocess.run(
                     [
-                        "rclone", "copy", file_path, f"GG PHOTO:album/{album_name}",
+                        rclone_path, "copy", file_path, f"GG PHOTO:album/{album_name}",
                         "--transfers=1", "--drive-chunk-size=128M", "--tpslimit=20", "-P"
                     ],
                     stdout=log_file, stderr=log_file, text=True, encoding="utf-8"
@@ -511,7 +527,7 @@ async def download_from_url(message, url):
                     download_stats['files_downloaded'] += 1
                     download_stats['bytes_downloaded'] += os.path.getsize(file_path)
 
-                # If the downloaded file is an archive, attempt extraction and move media files
+                # If downloaded file is an archive, attempt extraction and move media files
                 lower_file = file_path.lower()
                 if any(lower_file.endswith(ext) for ext in ARCHIVE_EXTENSIONS):
                     extract_dir = extract_archive(file_path)
