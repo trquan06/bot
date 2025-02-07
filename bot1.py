@@ -14,7 +14,6 @@ import tempfile
 import psutil  # For system monitoring
 from asyncio import Lock, Semaphore
 from pyrogram import Client, filters
-from pyrogram.handlers import MessageHandler
 from bs4 import BeautifulSoup
 
 # ---------------------------
@@ -64,6 +63,7 @@ logging.basicConfig(
 
 # Initialize Telegram Bot Client
 app = Client("telegram_downloader", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
 
 # ---------------------------
 # Utility Functions
@@ -164,29 +164,6 @@ def move_media_files(source_dir, destination):
                 except Exception as e:
                     logging.error(f"Failed to move file {src_path}: {e}")
     return moved_files
-
-
-async def wait_for_reply(chat_id: int, reply_to_message_id: int, timeout: int = 30):
-    """
-    Wait for a message in the chat that is a reply to the provided message_id.
-    Returns the message if received within timeout, otherwise None.
-    """
-    future = asyncio.Future()
-
-    def callback(client, msg):
-        if msg.chat.id == chat_id and msg.reply_to_message and msg.reply_to_message.message_id == reply_to_message_id:
-            if not future.done():
-                future.set_result(msg)
-
-    handler = MessageHandler(callback, filters=filters.chat(chat_id))
-    app.add_handler(handler)
-    try:
-        reply = await asyncio.wait_for(future, timeout=timeout)
-        return reply
-    except asyncio.TimeoutError:
-        return None
-    finally:
-        app.remove_handler(handler)
 
 
 # ---------------------------
@@ -360,28 +337,36 @@ async def status_command(client, message):
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
 
 
-# Updated /delete command: use wait_for_reply to require user confirmation by replying "yes"
+# Updated /delete command: require user confirmation by typing "yes"
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
-    confirmation = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
-    if confirmation and confirmation.text.lower() == "yes":
-        deleted = await delete_all_files()
-        await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
-    else:
-        await message.reply("Hủy xóa file vì không nhận được 'yes'.")
+    try:
+        # Use confirm_msg.id instead of confirm_msg.message_id
+        confirmation = await app.listen(message.chat.id, timeout=30)
+        if confirmation.text.lower() == "yes":
+            deleted = await delete_all_files()
+            await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
+        else:
+            await message.reply("Hủy xóa file. Bạn không nhập 'yes'.")
+    except asyncio.TimeoutError:
+        await message.reply("Xác nhận đã hết thời gian. Hủy xóa file.")
 
 
-# Updated /cleanup command: use wait_for_reply to require user confirmation by replying "yes"
+# Updated /cleanup command: require user confirmation by typing "yes"
 @app.on_message(filters.command("cleanup"))
 async def cleanup_command(client, message):
     confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
-    confirmation = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
-    if confirmation and confirmation.text.lower() == "yes":
-        deleted = await delete_all_files()
-        await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
-    else:
-        await message.reply("Hủy dọn dẹp file vì không nhận được 'yes'.")
+    try:
+        # Use confirm_msg.id instead of confirm_msg.message_id
+        confirmation = await app.listen(message.chat.id, timeout=30)
+        if confirmation.text.lower() == "yes":
+            deleted = await delete_all_files()
+            await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
+        else:
+            await message.reply("Hủy dọn dẹp file. Bạn không nhập 'yes'.")
+    except asyncio.TimeoutError:
+        await message.reply("Xác nhận đã hết thời gian. Hủy dọn dẹp file.")
 
 
 @app.on_message(filters.command("stats"))
