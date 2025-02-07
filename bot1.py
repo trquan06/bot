@@ -14,6 +14,7 @@ import tempfile
 import psutil  # For system monitoring
 from asyncio import Lock, Semaphore
 from pyrogram import Client, filters
+from pyrogram.handlers import MessageHandler
 from bs4 import BeautifulSoup
 
 # ---------------------------
@@ -22,6 +23,8 @@ from bs4 import BeautifulSoup
 API_ID = "21164074"
 API_HASH = "9aebf8ac7742705ce930b06a706754fd"
 BOT_TOKEN = "7878223314:AAGdrEWvu86sVWXCHIDFqqZw6m68mK6q5pY"
+
+# No need for allowed user checks now as only you are using the bot
 
 # Base folder to store downloaded files (Windows Downloads folder)
 BASE_DOWNLOAD_FOLDER = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -42,8 +45,10 @@ download_stats = {
 # To detect duplicate files using MD5 hashing
 downloaded_files = {}  # key: md5 hash, value: file path
 
-# Supported archive and media extensions
+# Supported archive extensions that should be auto-extracted
 ARCHIVE_EXTENSIONS = [".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".bz2"]
+
+# Supported media extensions
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"]
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"]
 
@@ -62,23 +67,6 @@ app = Client("telegram_downloader", api_id=API_ID, api_hash=API_HASH, bot_token=
 
 
 # ---------------------------
-# Error Handling Decorator
-# ---------------------------
-def error_handler(func):
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logging.exception(f"Unhandled exception in {func.__name__}: {e}")
-            # Try to reply back using the message object (assumed to be the second argument)
-            if len(args) >= 2 and hasattr(args[1], "reply"):
-                await args[1].reply(f"Có lỗi xảy ra trong {func.__name__}: {e}")
-            else:
-                print(f"Error in {func.__name__}: {e}")
-    return wrapper
-
-
-# ---------------------------
 # Utility Functions
 # ---------------------------
 def compute_md5(file_path, chunk_size=8192):
@@ -89,7 +77,7 @@ def compute_md5(file_path, chunk_size=8192):
             for chunk in iter(lambda: f.read(chunk_size), b""):
                 hash_md5.update(chunk)
     except Exception as e:
-        logging.error(f"Error computing MD5 for {file_path}: {e}")
+        logging.error(f"Error computing md5 for {file_path}: {e}")
         return None
     return hash_md5.hexdigest()
 
@@ -99,12 +87,12 @@ async def delete_all_files():
     count = 0
     for root, dirs, files in os.walk(BASE_DOWNLOAD_FOLDER):
         for file in files:
-            file_path = os.path.join(root, file)
             try:
+                file_path = os.path.join(root, file)
                 os.remove(file_path)
                 count += 1
             except Exception as e:
-                logging.error(f"Failed to delete {file_path}: {e}")
+                logging.error(f"Failed to delete file {file_path}: {e}")
     return count
 
 
@@ -135,10 +123,11 @@ def extract_archive(file_path):
             with tarfile.open(file_path, 'r:*') as tar_ref:
                 tar_ref.extractall(temp_extract_dir)
         elif ext in [".rar", ".7z"]:
+            # Use 7z command line tool; ensure 7z is installed and in PATH.
             result = subprocess.run(["7z", "x", file_path, f"-o{temp_extract_dir}", "-y"],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if result.returncode != 0:
-                logging.error(f"7z extraction error for {file_path}: {result.stderr}")
+                logging.error(f"Extraction error for {file_path}: {result.stderr}")
                 shutil.rmtree(temp_extract_dir)
                 return None
         else:
@@ -148,21 +137,23 @@ def extract_archive(file_path):
         logging.info(f"Extracted {file_path} to {temp_extract_dir}")
         return temp_extract_dir
     except Exception as e:
-        logging.error(f"Error extracting {file_path}: {e}")
+        logging.error(f"Error extracting archive {file_path}: {e}")
         shutil.rmtree(temp_extract_dir)
         return None
 
 
 def move_media_files(source_dir, destination):
     """
-    Recursively move image and video files from source_dir to destination.
-    Returns a list of moved file paths.
+    Recursively search source_dir for image and video files.
+    Move them to the destination folder.
     """
     moved_files = []
     for root, dirs, files in os.walk(source_dir):
         for file in files:
-            if any(file.lower().endswith(ext) for ext in IMAGE_EXTENSIONS + VIDEO_EXTENSIONS):
+            file_lower = file.lower()
+            if any(file_lower.endswith(ext) for ext in IMAGE_EXTENSIONS + VIDEO_EXTENSIONS):
                 src_path = os.path.join(root, file)
+                # If a file with same name exists in destination, generate a unique name
                 dest_path = os.path.join(destination, file)
                 if os.path.exists(dest_path):
                     base, ext = os.path.splitext(file)
@@ -170,17 +161,39 @@ def move_media_files(source_dir, destination):
                 try:
                     shutil.move(src_path, dest_path)
                     moved_files.append(dest_path)
-                    logging.info(f"Moved {src_path} to {dest_path}")
+                    logging.info(f"Moved media file {src_path} to {dest_path}")
                 except Exception as e:
-                    logging.error(f"Failed to move {src_path}: {e}")
+                    logging.error(f"Failed to move file {src_path}: {e}")
     return moved_files
+
+
+async def wait_for_reply(chat_id: int, reply_to_message_id: int, timeout: int = 30):
+    """
+    Wait for a message in the chat that is a reply to the provided message_id.
+    Returns the message if received within timeout, otherwise None.
+    """
+    future = asyncio.Future()
+
+    def callback(client, msg):
+        if msg.chat.id == chat_id and msg.reply_to_message and msg.reply_to_message.message_id == reply_to_message_id:
+            if not future.done():
+                future.set_result(msg)
+
+    handler = MessageHandler(callback, filters=filters.chat(chat_id))
+    app.add_handler(handler)
+    try:
+        reply = await asyncio.wait_for(future, timeout=timeout)
+        return reply
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        app.remove_handler(handler)
 
 
 # ---------------------------
 # Bot Command Handlers
 # ---------------------------
 @app.on_message(filters.command("start"))
-@error_handler
 async def start_command(client, message):
     welcome_text = (
         "Chào mừng!\n"
@@ -191,17 +204,17 @@ async def start_command(client, message):
         "/retry_download - Tải lại file bị lỗi\n"
         "/retry_upload - Tải lại file upload bị lỗi\n"
         "/status - Hiển thị trạng thái hệ thống\n"
-        "/delete - Xóa tất cả các file trong thư mục tải về (xác nhận bằng cách trả lời 'yes')\n"
+        "/delete - Xóa tất cả các file trong thư mục tải về (cần xác nhận bằng cách trả lời 'yes')\n"
         "/stats - Thống kê tải về\n"
-        "/cleanup - Dọn dẹp file tạm thời (xác nhận bằng cách trả lời 'yes')"
+        "/cleanup - Dọn dẹp file tạm thời (cần xác nhận bằng cách trả lời 'yes')"
     )
     await message.reply(welcome_text)
 
 
 @app.on_message(filters.command("download"))
-@error_handler
 async def download_command(client, message):
     args = message.text.split(maxsplit=1)
+    # URL-based download: if a URL is provided along with /download command.
     if len(args) > 1:
         url = args[1].strip()
         if url.startswith("http"):
@@ -210,17 +223,17 @@ async def download_command(client, message):
             await message.reply("URL không hợp lệ. Hãy đảm bảo bạn nhập đúng định dạng URL.")
         return
 
+    # Activate download mode for forwarded media messages.
     global downloading
     async with download_lock:
         if downloading:
             await message.reply("Đã có tác vụ tải về đang chạy.")
             return
         downloading = True
-    await message.reply("Chế độ tải về đã được kích hoạt. Forward các tin nhắn chứa ảnh, video hay tài liệu để tải về.")
+    await message.reply("Chế độ tải về đã được kích hoạt. Forward các tin nhắn chứa ảnh, video, tài liệu để tải về.")
 
 
 @app.on_message(filters.command("stop"))
-@error_handler
 async def stop_command(client, message):
     global downloading
     async with download_lock:
@@ -232,21 +245,21 @@ async def stop_command(client, message):
 
 
 @app.on_message(filters.command("upload"))
-@error_handler
 async def upload_command(client, message):
     global uploading, failed_uploads
     if uploading:
         await message.reply("Đã có tác vụ đồng bộ hóa đang chạy.")
         return
 
+    # Use absolute path for rclone
     rclone_path = r"C:\rclone\rclone.exe"
     if not os.path.exists(rclone_path):
         await message.reply("Rclone không được tìm thấy tại C:\\rclone\\rclone.exe. Vui lòng kiểm tra lại đường dẫn.")
         return
 
     uploading = True
-    await message.reply("Bắt đầu đồng bộ hóa file lên album ONLYFAN trên Google Photos...")
-    album_name = "ONLYFAN"
+    await message.reply("Bắt đầu đồng bộ hóa file ảnh/video lên album ONLYFAN trên Google Photos...")
+    album_name = "ONLYFAN"  # Album name for uploads
 
     try:
         with open("error_log.txt", "w", encoding="utf-8") as log_file:
@@ -257,25 +270,26 @@ async def upload_command(client, message):
                 ],
                 stdout=log_file, stderr=log_file, text=True, encoding="utf-8"
             )
+
         if result.returncode == 0:
-            await message.reply("Đồng bộ hóa thành công!")
+            await message.reply("Đồng bộ hóa thành công tất cả các file lên album ONLYFAN trên Google Photos.")
         else:
-            await message.reply("Có lỗi khi đồng bộ hóa, vui lòng kiểm tra error_log.txt.")
-            failed_uploads.extend(
-                os.path.join(root, file)
-                for root, _, files in os.walk(BASE_DOWNLOAD_FOLDER)
-                for file in files
-            )
+            await message.reply("Có lỗi khi đồng bộ hóa, vui lòng kiểm tra error_log.txt để biết chi tiết.")
+            failed_uploads.extend(os.path.join(root, file) 
+                                  for root, _, files in os.walk(BASE_DOWNLOAD_FOLDER) for file in files)
+
+        # Delete all files after upload
         deleted = await delete_all_files()
-        await message.reply(f"Đã xóa {deleted} file sau upload.")
+        await message.reply(f"Tất cả ({deleted}) các file đã được xóa sau khi upload.")
+
     except Exception as e:
         logging.error(f"Upload error: {e}")
-        await message.reply(f"Lỗi khi upload: {e}")
+        await message.reply(f"Có lỗi xảy ra khi đồng bộ hóa: {e}")
+
     uploading = False
 
 
 @app.on_message(filters.command("retry_download"))
-@error_handler
 async def retry_download_command(client, message):
     global failed_files
     if not failed_files:
@@ -291,33 +305,34 @@ async def retry_download_command(client, message):
             await download_with_progress(file_info["message"], file_info["media_type"], retry=True)
             failed_files.remove(file_info)
         except Exception as e:
-            await message.reply(f"Lỗi khi tải lại file {file_path}: {e}")
-    await message.reply("Đã hoàn thành tải lại các file bị lỗi.")
+            await message.reply(f"Có lỗi khi tải lại file: {file_path}\nChi tiết: {e}")
+    await message.reply("Hoàn thành tải lại các file bị lỗi.")
 
 
 @app.on_message(filters.command("retry_upload"))
-@error_handler
 async def retry_upload_command(client, message):
     global failed_uploads, uploading
     if not failed_uploads:
-        await message.reply("Không có file upload bị lỗi để tải lại.")
+        await message.reply("Không có file upload nào bị lỗi để tải lại.")
         return
 
     if uploading:
         await message.reply("Đã có tác vụ đồng bộ hóa đang chạy.")
         return
 
+    # Use absolute rclone path
     rclone_path = r"C:\rclone\rclone.exe"
     if not os.path.exists(rclone_path):
         await message.reply("Rclone không được tìm thấy tại C:\\rclone\\rclone.exe. Vui lòng kiểm tra lại đường dẫn.")
         return
 
     uploading = True
-    await message.reply("Bắt đầu tải lại file upload bị lỗi...")
+    await message.reply("Bắt đầu tải lại quá trình upload cho các file bị lỗi...")
     album_name = "ONLYFAN"
 
     try:
         with open("error_log_retry.txt", "w", encoding="utf-8") as log_file:
+            # Retry uploading only the failed files
             for file_path in failed_uploads.copy():
                 result = subprocess.run(
                     [
@@ -329,78 +344,70 @@ async def retry_upload_command(client, message):
                 if result.returncode == 0:
                     failed_uploads.remove(file_path)
                 else:
-                    logging.error(f"Retry upload thất bại cho {file_path}")
+                    logging.error(f"Retry upload failed for {file_path}")
         if not failed_uploads:
-            await message.reply("Tất cả file upload lỗi đã được tải lại thành công.")
+            await message.reply("Tất cả các file upload bị lỗi đã được tải lại thành công.")
         else:
-            await message.reply("Một số file vẫn chưa upload được. Kiểm tra error_log_retry.txt để biết chi tiết.")
+            await message.reply("Một số file vẫn chưa upload được. Vui lòng kiểm tra error_log_retry.txt để biết chi tiết.")
     except Exception as e:
-        await message.reply(f"Lỗi khi retry upload: {e}")
+        await message.reply(f"Có lỗi khi retry upload: {e}")
     uploading = False
 
 
 @app.on_message(filters.command("status"))
-@error_handler
 async def status_command(client, message):
     status = get_system_status()
     status_message = f"CPU: {status['cpu']}\nMemory: {status['memory']}\nDisk: {status['disk']}\n"
     await message.reply(f"Trạng thái hệ thống:\n{status_message}")
 
 
+# Updated /delete command: require user confirmation by replying "yes"
 @app.on_message(filters.command("delete"))
-@error_handler
 async def delete_command(client, message):
-    confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' (trong 30 giây) để xác nhận.")
-    try:
-        confirmation = await app.listen(message.chat.id, timeout=30)
-        if confirmation.text.lower() == "yes":
-            deleted = await delete_all_files()
-            await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
-        else:
-            await message.reply("Hủy xóa file vì không nhận được 'yes'.")
-    except asyncio.TimeoutError:
-        await message.reply("Xác nhận hết thời gian. Hủy xóa file.")
+    confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    reply = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
+    if reply and reply.text.lower() == "yes":
+        deleted = await delete_all_files()
+        await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
+    else:
+        await message.reply("Hủy xóa file vì không nhận được 'yes'.")
 
 
+# Updated /cleanup command: require user confirmation by replying "yes"
 @app.on_message(filters.command("cleanup"))
-@error_handler
 async def cleanup_command(client, message):
-    confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' (trong 30 giây) để xác nhận.")
-    try:
-        confirmation = await app.listen(message.chat.id, timeout=30)
-        if confirmation.text.lower() == "yes":
-            deleted = await delete_all_files()
-            await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
-        else:
-            await message.reply("Hủy dọn dẹp file vì không nhận được 'yes'.")
-    except asyncio.TimeoutError:
-        await message.reply("Xác nhận hết thời gian. Hủy dọn dẹp file.")
+    confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    reply = await wait_for_reply(message.chat.id, confirm_msg.message_id, timeout=30)
+    if reply and reply.text.lower() == "yes":
+        deleted = await delete_all_files()
+        await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
+    else:
+        await message.reply("Hủy dọn dẹp file vì không nhận được 'yes'.")
 
 
 @app.on_message(filters.command("stats"))
-@error_handler
 async def stats_command(client, message):
     stats_message = (
-        f"Số file tải: {download_stats['files_downloaded']}\n"
-        f"Tổng dung lượng: {download_stats['bytes_downloaded'] / (1024*1024):.2f} MB"
+        f"Số file đã tải: {download_stats['files_downloaded']}\n"
+        f"Tổng dung lượng đã tải: {download_stats['bytes_downloaded'] / (1024*1024):.2f} MB"
     )
     await message.reply(f"Thống kê tải về:\n{stats_message}")
 
 
 @app.on_message()
-@error_handler
 async def handle_message(client, message):
-    # Xử lý tin nhắn chứa URL ngoài chế độ tải về
+    # Handle URL messages outside of download mode
     if message.text and message.text.startswith("http"):
         await download_from_url(message, message.text.strip())
         return
 
+    # Only process if in download mode
     global downloading
     async with download_lock:
         if not downloading:
             return
 
-    # Xử lý tin nhắn forwarded chứa media
+    # Handle forwarded media messages (photo, video, document)
     if message.photo or message.video or message.document:
         try:
             tasks = []
@@ -421,7 +428,6 @@ async def handle_message(client, message):
 # ---------------------------
 # Download Functions
 # ---------------------------
-@error_handler
 async def download_with_progress(message, media_type, retry=False):
     global failed_files, download_stats, downloaded_files
 
@@ -430,6 +436,7 @@ async def download_with_progress(message, media_type, retry=False):
     elif media_type == "video":
         ext = "mp4"
     elif media_type == "tài liệu":
+        # Determine file extension from document mime or default to .dat
         ext = "dat"
     else:
         ext = "dat"
@@ -441,15 +448,9 @@ async def download_with_progress(message, media_type, retry=False):
     async def progress_callback(current, total):
         elapsed_time = time.time() - start_time
         speed = current / elapsed_time if elapsed_time > 0 else 0
-        # Send periodic update if the download is long-running
-        if total > 1e6 and current % (1024*1024) < 65536:
-            await message.reply(
-                f"Đang tải {media_type}: {current*100/total:.2f}% - {current / (1024*1024):.2f} MB đã tải, tốc độ: {speed/1024:.2f} KB/s",
-                quote=True
-            )
         if current == total:
             await message.reply(
-                f"Tải xong {media_type}: 100% ({total / (1024*1024):.2f} MB)\nTốc độ: {speed/1024:.2f} KB/s",
+                f"Tải xong {media_type}: 100% ({total / (1024 * 1024):.2f} MB)\nTốc độ: {speed / 1024:.2f} KB/s",
                 quote=True
             )
 
@@ -461,12 +462,13 @@ async def download_with_progress(message, media_type, retry=False):
                 progress=progress_callback
             )
 
-        # Check file size limit (10GB)
+        # Check file size limit (10GB max)
         if os.path.getsize(file_path) > 10 * 1024**3:
             os.remove(file_path)
-            await message.reply("File vượt quá giới hạn 10GB và đã bị xóa.")
+            await message.reply("File vượt quá giới hạn kích thước 10GB và đã bị xóa.")
             return
 
+        # Compute MD5 to check for duplicates
         file_md5 = compute_md5(file_path)
         if file_md5 in downloaded_files:
             os.remove(file_path)
@@ -475,9 +477,11 @@ async def download_with_progress(message, media_type, retry=False):
         else:
             downloaded_files[file_md5] = file_path
 
+        # Update download statistics
         download_stats['files_downloaded'] += 1
         download_stats['bytes_downloaded'] += os.path.getsize(file_path)
 
+        # If file is an archive, attempt extraction and media file relocation.
         lower_file = file_path.lower()
         if any(lower_file.endswith(ext) for ext in ARCHIVE_EXTENSIONS):
             extract_dir = extract_archive(file_path)
@@ -486,16 +490,17 @@ async def download_with_progress(message, media_type, retry=False):
                 if moved:
                     await message.reply(f"Đã tự động giải nén và di chuyển {len(moved)} file media từ archive.")
                 else:
-                    await message.reply("Archive giải nén nhưng không tìm thấy file media hợp lệ.")
+                    await message.reply("Archive được giải nén nhưng không tìm thấy file media hợp lệ để di chuyển.")
+                # Cleanup: remove the extracted temporary folder and the original archive
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 os.remove(file_path)
+
     except Exception as e:
         logging.error(f"Download error: {e}")
         failed_files.append({"message": message, "media_type": media_type, "file_path": file_path})
         await message.reply(f"Tải file bị lỗi: {e}\nFile đã được thêm vào danh sách retry.", quote=True)
 
 
-@error_handler
 async def download_from_url(message, url):
     connector = aiohttp.TCPConnector(limit=50)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -505,17 +510,20 @@ async def download_from_url(message, url):
                 if response.status == 200 and "html" in content_type:
                     html_content = await response.text()
                     soup = BeautifulSoup(html_content, "html.parser")
+                    
+                    # Special handling for telegra.ph URLs
                     if "telegra.ph" in url:
                         media_links = [tag["src"] for tag in soup.find_all("img", src=True)]
                         if not media_links:
-                            await message.reply("Không tìm thấy ảnh trong URL telegra.ph.")
+                            await message.reply("Không tìm thấy ảnh trong URL Telegra.ph.")
                             return
                         for media_url in media_links:
                             if media_url.startswith("/"):
                                 media_url = f"https://telegra.ph{media_url}"
                             await download_from_url(message, media_url)
                         return
-
+                    
+                    # Find media tags in HTML
                     media_links = [tag["src"] for tag in soup.find_all(["img", "video"], src=True)]
                     if media_links:
                         for media_url in media_links:
@@ -524,17 +532,18 @@ async def download_from_url(message, url):
                             await download_from_url(message, media_url)
                         return
                     else:
-                        await message.reply("Không tìm thấy media trong URL.")
+                        await message.reply("Không tìm thấy ảnh hoặc video trong URL được cung cấp.")
                         return
 
                 if response.status == 500:
-                    await message.reply(f"Lỗi server (500) từ URL: {url}")
+                    await message.reply(f"Lỗi server (500) từ URL: {url}. Vui lòng thử lại sau.")
                     return
 
                 if response.status != 200:
-                    await message.reply(f"Không thể tải file từ URL: {url} (Mã lỗi: {response.status})")
+                    await message.reply(f"Không thể tải file từ URL: {url}\nMã lỗi: {response.status}")
                     return
 
+                # Process non-HTML content (like media files or archives)
                 ext = mimetypes.guess_extension(content_type.split(";")[0]) or ""
                 file_name = f"{uuid.uuid4().hex}{ext}"
                 file_path = os.path.join(BASE_DOWNLOAD_FOLDER, file_name)
@@ -542,7 +551,8 @@ async def download_from_url(message, url):
                     while chunk := await response.content.read(65536):
                         f.write(chunk)
                 await message.reply(f"Tải thành công file từ URL: {url}\nĐã lưu tại: {file_path}")
-
+                
+                # Update download statistics and check duplicate
                 file_md5 = compute_md5(file_path)
                 if file_md5 in downloaded_files:
                     os.remove(file_path)
@@ -553,6 +563,7 @@ async def download_from_url(message, url):
                     download_stats['files_downloaded'] += 1
                     download_stats['bytes_downloaded'] += os.path.getsize(file_path)
 
+                # If downloaded file is an archive, attempt extraction and move media files
                 lower_file = file_path.lower()
                 if any(lower_file.endswith(ext) for ext in ARCHIVE_EXTENSIONS):
                     extract_dir = extract_archive(file_path)
@@ -561,13 +572,14 @@ async def download_from_url(message, url):
                         if moved:
                             await message.reply(f"Đã tự động giải nén và di chuyển {len(moved)} file media từ archive.")
                         else:
-                            await message.reply("Archive giải nén nhưng không tìm thấy file media hợp lệ.")
+                            await message.reply("Archive được giải nén nhưng không tìm thấy file media hợp lệ để di chuyển.")
                         shutil.rmtree(extract_dir, ignore_errors=True)
                         os.remove(file_path)
+
         except Exception as e:
             logging.error(f"Error downloading from URL {url}: {e}")
-            await message.reply(f"Có lỗi khi tải file từ URL: {e}")
-            
+            await message.reply(f"Có lỗi xảy ra khi tải file từ URL: {e}")
+
 
 # ---------------------------
 # Main Execution
