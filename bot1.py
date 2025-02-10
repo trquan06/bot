@@ -596,9 +596,70 @@ async def download_from_url(message, url):
             logging.error(f"Error downloading from URL {url}: {e}")
             await message.reply(f"Có lỗi xảy ra khi tải file từ URL: {e}")
             
+async def list_archive_contents(file_path):
+    """List contents of an archive file."""
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        if ext == ".zip":
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                return zip_ref.namelist()
+        elif ext in [".tar", ".gz", ".tgz", ".bz2"]:
+            with tarfile.open(file_path, 'r:*') as tar_ref:
+                return tar_ref.getnames()
+        elif ext in [".rar", ".7z"]:
+            result = subprocess.run(
+                ["7z", "l", file_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            if result.returncode == 0:
+                # Parse 7z output to get filenames
+                lines = result.stdout.split('\n')
+                files = []
+                for line in lines:
+                    if line.strip() and not line.startswith('---') and not line.startswith('Date'):
+                        parts = line.split()
+                        if len(parts) >= 5:  # Typical 7z output has at least 5 columns
+                            files.append(parts[-1])  # Last column is filename
+                return files
+        return []
+    except Exception as e:
+        logging.error(f"Error listing archive contents: {e}")
+        return []
+
+async def extract_selected_files(file_path, selected_indices, extract_dir):
+    """Extract only selected files from archive."""
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        if ext == ".zip":
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                all_files = zip_ref.namelist()
+                for idx in selected_indices:
+                    if 0 <= idx < len(all_files):
+                        zip_ref.extract(all_files[idx], extract_dir)
+        elif ext in [".tar", ".gz", ".tgz", ".bz2"]:
+            with tarfile.open(file_path, 'r:*') as tar_ref:
+                all_files = tar_ref.getnames()
+                for idx in selected_indices:
+                    if 0 <= idx < len(all_files):
+                        tar_ref.extract(all_files[idx], extract_dir)
+        elif ext in [".rar", ".7z"]:
+            # For 7z, we need to extract files by name
+            files = await list_archive_contents(file_path)
+            selected_files = [files[idx] for idx in selected_indices if 0 <= idx < len(files)]
+            for file in selected_files:
+                result = subprocess.run(
+                    ["7z", "x", file_path, f"-o{extract_dir}", file, "-y"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                if result.returncode != 0:
+                    logging.error(f"Error extracting {file}: {result.stderr}")
+        return True
+    except Exception as e:
+        logging.error(f"Error extracting selected files: {e}")
+        return False
+
 @app.on_message(filters.command("extract"))
 async def extract_command(client, message):
-    # Check if a file is attached with the command
     if not message.document:
         await message.reply("Vui lòng gửi file cần giải nén kèm theo lệnh /extract")
         return
@@ -612,7 +673,6 @@ async def extract_command(client, message):
 
         file_ext = os.path.splitext(file_name)[1].lower()
         
-        # Check if file is a supported archive
         if file_ext not in ARCHIVE_EXTENSIONS:
             await message.reply(f"Định dạng file {file_ext} không được hỗ trợ.\nCác định dạng được hỗ trợ: {', '.join(ARCHIVE_EXTENSIONS)}")
             return
@@ -625,37 +685,67 @@ async def extract_command(client, message):
             message.document,
             file_name=file_path
         )
-        
-        await status_msg.edit("Đang giải nén file...")
-        
-        # Extract the archive
-        extract_dir = extract_archive(file_path)
-        if not extract_dir:
-            await status_msg.edit("Có lỗi trong quá trình giải nén file.")
-            if os.path.exists(file_path):
-                os.remove(file_path)
+
+        # List contents
+        contents = await list_archive_contents(file_path)
+        if not contents:
+            await status_msg.edit("Không thể đọc nội dung file nén hoặc file rỗng.")
+            os.remove(file_path)
             return
 
-        # Move media files if found
-        moved_files = move_media_files(extract_dir, BASE_DOWNLOAD_FOLDER)
+        # Show contents with numbers
+        content_list = "Nội dung file nén:\n"
+        for i, name in enumerate(contents):
+            content_list += f"{i}. {name}\n"
         
-        # Clean up
-        try:
-            os.remove(file_path)  # Remove original archive
-            shutil.rmtree(extract_dir)  # Remove temporary extraction directory
-        except Exception as e:
-            logging.error(f"Clean up error: {e}")
+        if len(content_list) > 4000:  # Telegram message limit
+            content_list = content_list[:3900] + "\n... (và các file khác)"
 
-        # Report results
-        if moved_files:
-            await status_msg.edit(f"Đã giải nén và di chuyển {len(moved_files)} file media thành công.")
-        else:
-            await status_msg.edit("Giải nén thành công nhưng không tìm thấy file media nào.")
+        await status_msg.edit(f"{content_list}\n\nNhập các số thứ tự file cần giải nén (cách nhau bởi dấu phẩy), hoặc 'all' để giải nén tất cả (hết hạn sau 60 giây):")
+
+        try:
+            response = await client.wait_for_message(
+                chat_id=message.chat.id,
+                filters=filters.user(message.from_user.id) & filters.text,
+                timeout=60
+            )
+
+            selected_indices = []
+            if response.text.lower() == 'all':
+                selected_indices = list(range(len(contents)))
+            else:
+                try:
+                    selected_indices = [int(idx.strip()) for idx in response.text.split(',')]
+                except ValueError:
+                    await status_msg.edit("Định dạng số không hợp lệ. Hủy giải nén.")
+                    os.remove(file_path)
+                    return
+
+            await status_msg.edit("Đang giải nén các file đã chọn...")
+            extract_dir = tempfile.mkdtemp(dir=BASE_DOWNLOAD_FOLDER)
+            
+            if await extract_selected_files(file_path, selected_indices, extract_dir):
+                # Move media files if found
+                moved_files = move_media_files(extract_dir, BASE_DOWNLOAD_FOLDER)
+                
+                # Clean up
+                os.remove(file_path)
+                shutil.rmtree(extract_dir)
+
+                if moved_files:
+                    await status_msg.edit(f"Đã giải nén và di chuyển {len(moved_files)} file media thành công.")
+                else:
+                    await status_msg.edit("Giải nén thành công nhưng không tìm thấy file media nào.")
+            else:
+                await status_msg.edit("Có lỗi khi giải nén các file đã chọn.")
+
+        except asyncio.TimeoutError:
+            await status_msg.edit("Hết thời gian chọn file. Hủy giải nén.")
+            os.remove(file_path)
 
     except Exception as e:
         logging.error(f"Extraction error: {e}")
         await message.reply(f"Có lỗi xảy ra khi giải nén: {e}")
-
 # ---------------------------
 # Main Execution
 # ---------------------------
