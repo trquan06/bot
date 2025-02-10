@@ -418,16 +418,17 @@ async def download_with_progress(message, media_type, retry=False):
     elif media_type == "video":
         ext = "mp4"
     elif media_type == "tài liệu":
-    # Lấy tên file gốc nếu có
-    if message.document.file_name:
-        ext = os.path.splitext(message.document.file_name)[1].lstrip('.')
-    else:
-        # Sử dụng mime type để xác định phần mở rộng
-        mime_type = message.document.mime_type
-        if mime_type:
-            ext = mimetypes.guess_extension(mime_type, strict=False).lstrip('.') or 'dat'
+        if message.document.file_name:
+            ext = os.path.splitext(message.document.file_name)[1].lstrip('.')
         else:
-            ext = 'dat'
+            # Sử dụng mime type để xác định phần mở rộng
+            mime_type = message.document.mime_type
+            if mime_type:
+                ext = mimetypes.guess_extension(mime_type, strict=False).lstrip('.') or 'dat'
+            else:
+                ext = 'dat'
+    else:
+        ext = "dat"
 
     file_name = f"{uuid.uuid4().hex}.{ext}"
     file_path = os.path.join(BASE_DOWNLOAD_FOLDER, file_name)
