@@ -339,30 +339,56 @@ async def status_command(client, message):
 
 @app.on_message(filters.command("delete"))
 async def delete_command(client, message):
-    confirm_msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    msg = await message.reply("Bạn có chắc chắn muốn xóa tất cả các file trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    
     try:
-        # Use app.listen() method to wait for a response
-        confirmation = await app.listen(message.chat.id, timeout=30)
-        if confirmation.text.lower() == "yes":
+        async def wait_for_confirmation():
+            # Create a filter for text messages from the same user
+            def confirm_filter(_, __, m):
+                return (m.from_user and m.from_user.id == message.from_user.id and 
+                        m.text and m.text.lower() == "yes")
+
+            return await client.wait_for_message(
+                chat_id=message.chat.id,
+                filters=filters.create(confirm_filter),
+                timeout=30
+            )
+
+        confirmation = await wait_for_confirmation()
+        
+        if confirmation:
             deleted = await delete_all_files()
             await message.reply(f"Đã xóa {deleted} file trong thư mục tải về.")
         else:
             await message.reply("Hủy xóa file. Bạn không nhập 'yes'.")
+            
     except asyncio.TimeoutError:
         await message.reply("Xác nhận đã hết thời gian. Hủy xóa file.")
 
-
 @app.on_message(filters.command("cleanup"))
 async def cleanup_command(client, message):
-    confirm_msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    msg = await message.reply("Bạn có chắc chắn muốn dọn dẹp tất cả các file tạm thời trong thư mục tải về? Hãy trả lời 'yes' để xác nhận (hết hạn sau 30 giây).")
+    
     try:
-        # Use app.listen() method to wait for a response
-        confirmation = await app.listen(message.chat.id, timeout=30)
-        if confirmation.text.lower() == "yes":
+        async def wait_for_confirmation():
+            def confirm_filter(_, __, m):
+                return (m.from_user and m.from_user.id == message.from_user.id and 
+                        m.text and m.text.lower() == "yes")
+
+            return await client.wait_for_message(
+                chat_id=message.chat.id,
+                filters=filters.create(confirm_filter),
+                timeout=30
+            )
+
+        confirmation = await wait_for_confirmation()
+        
+        if confirmation:
             deleted = await delete_all_files()
             await message.reply(f"Đã dọn dẹp {deleted} file tạm thời trong thư mục tải về.")
         else:
             await message.reply("Hủy dọn dẹp file. Bạn không nhập 'yes'.")
+            
     except asyncio.TimeoutError:
         await message.reply("Xác nhận đã hết thời gian. Hủy dọn dẹp file.")
 
