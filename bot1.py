@@ -182,7 +182,8 @@ async def start_command(client, message):
         "/status - Hiển thị trạng thái hệ thống\n"
         "/delete - Xóa tất cả các file trong thư mục tải về (cần xác nhận bằng cách trả lời 'yes')\n"
         "/stats - Thống kê tải về\n"
-        "/cleanup - Dọn dẹp file tạm thời (cần xác nhận bằng cách trả lời 'yes')"
+        "/cleanup - Dọn dẹp file tạm thời (cần xác nhận bằng cách trả lời 'yes')\n"
+        "/extract - Giải nén file nén (gửi file kèm lệnh này để giải nén)"
     )
     await message.reply(welcome_text)
 
@@ -594,7 +595,66 @@ async def download_from_url(message, url):
         except Exception as e:
             logging.error(f"Error downloading from URL {url}: {e}")
             await message.reply(f"Có lỗi xảy ra khi tải file từ URL: {e}")
+            
+@app.on_message(filters.command("extract"))
+async def extract_command(client, message):
+    # Check if a file is attached with the command
+    if not message.document:
+        await message.reply("Vui lòng gửi file cần giải nén kèm theo lệnh /extract")
+        return
 
+    try:
+        # Get file name and extension
+        file_name = message.document.file_name
+        if not file_name:
+            await message.reply("Không thể xác định tên file.")
+            return
+
+        file_ext = os.path.splitext(file_name)[1].lower()
+        
+        # Check if file is a supported archive
+        if file_ext not in ARCHIVE_EXTENSIONS:
+            await message.reply(f"Định dạng file {file_ext} không được hỗ trợ.\nCác định dạng được hỗ trợ: {', '.join(ARCHIVE_EXTENSIONS)}")
+            return
+
+        # Download the archive
+        status_msg = await message.reply("Đang tải file về...")
+        file_path = os.path.join(BASE_DOWNLOAD_FOLDER, file_name)
+        
+        await app.download_media(
+            message.document,
+            file_name=file_path
+        )
+        
+        await status_msg.edit("Đang giải nén file...")
+        
+        # Extract the archive
+        extract_dir = extract_archive(file_path)
+        if not extract_dir:
+            await status_msg.edit("Có lỗi trong quá trình giải nén file.")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return
+
+        # Move media files if found
+        moved_files = move_media_files(extract_dir, BASE_DOWNLOAD_FOLDER)
+        
+        # Clean up
+        try:
+            os.remove(file_path)  # Remove original archive
+            shutil.rmtree(extract_dir)  # Remove temporary extraction directory
+        except Exception as e:
+            logging.error(f"Clean up error: {e}")
+
+        # Report results
+        if moved_files:
+            await status_msg.edit(f"Đã giải nén và di chuyển {len(moved_files)} file media thành công.")
+        else:
+            await status_msg.edit("Giải nén thành công nhưng không tìm thấy file media nào.")
+
+    except Exception as e:
+        logging.error(f"Extraction error: {e}")
+        await message.reply(f"Có lỗi xảy ra khi giải nén: {e}")
 
 # ---------------------------
 # Main Execution
